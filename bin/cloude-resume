@@ -51,6 +51,19 @@ if [[ ! -x "$CLOUDE_RUN" ]]; then
     exit 2
 fi
 
+# Preflight: the Docker daemon must be up. Without this, `cloude-run`'s
+# `make build` step fails inside each tmux session and leaves a dead
+# shell behind — visible only if you `tmux attach`. Catching it here is
+# much friendlier: one error, no broken sessions, no cleanup needed.
+if ! docker info >/dev/null 2>&1; then
+    echo "ERROR: Docker daemon isn't running." >&2
+    case "$(uname -s)" in
+        Darwin) echo "       Start Docker Desktop and re-run this script." >&2 ;;
+        *)      echo "       Start the docker daemon and re-run this script." >&2 ;;
+    esac
+    exit 2
+fi
+
 TASK_FILES=()
 if [[ $# -ge 1 ]]; then
     if [[ ! -f "$1" ]]; then
