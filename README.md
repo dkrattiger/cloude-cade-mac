@@ -124,7 +124,7 @@ stage, each tagged with who currently has the ball — `:agent:`,
 labelled with the repo it belongs to:
 
 ```text
-cloude tasks      ↑/↓ move  p open PR  t tmux  c copy slug  r reload  q quit
+cloude tasks      ↑/↓ move  p open PR  t tmux  R resume  c copy slug  r reload  q quit
 
 ACTIVE (4)
   MERGING   :agent:    Cache the dashboard customer lookup PR #312  Acme Webapp
@@ -159,7 +159,7 @@ session are all named after — to the system clipboard, ready to paste
 into a command.
 
 ```sh
-bin/cloude-dash    # /: search · p: open PR · t: switch to task · c: copy slug · r: reload · q: quit
+bin/cloude-dash    # /: search · p: open PR · t: switch to task · R: resume sessions · c: copy slug · r: reload · q: quit
 ```
 
 See [Dashboard](#dashboard) for the full key list.
@@ -372,8 +372,9 @@ Personal-TODO rows (non-repo projects) carry no repo label.
 Keys: `↑`/`↓` or `j`/`k` move, `g`/`G` jump to top/bottom, `p` opens
 the highlighted task's PR in the default browser, `t` switches to its
 `cloude-<slug>` tmux session (uses `tmux switch-client` when the
-dashboard is already inside tmux, otherwise `tmux attach`), `r`
-reloads, `q` quits.
+dashboard is already inside tmux, otherwise `tmux attach`), `R`
+re-creates any missing tmux sessions for active tasks (host-reboot
+recovery — see `bin/cloude-resume`), `r` reloads, `q` quits.
 
 Press `/` to enter search-as-you-type mode. The status line shows the
 query as you type; rows are filtered fzf-style to those whose title

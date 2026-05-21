@@ -114,6 +114,18 @@ dependency, and runs on plain `python3`.
   `CLOUDE_NO_PREFILL` (set non-empty to opt out) and
   `CLOUDE_PREFILL_TIMEOUT` (seconds to wait, default 300). Logs to
   `/tmp/cloude-prefill-<slug>.log`.
+- **`cloude-resume [<task-file>]`** — Re-create the tmux session(s)
+  for active tasks. After a host reboot, every cloude tmux session is
+  gone (and so is the per-task Docker container, since `cloude-run`
+  starts containers with `--rm`); the worktree, the org file, the
+  branch, and the PR are all still on disk / on GitHub. With no
+  argument, walks `tasks/active/` and resumes every task whose
+  `cloude-<slug>` tmux session is missing; with a task-file argument,
+  resumes only that task. Idempotent — already-running sessions are
+  left alone. The actual `tmux new-session -d` call matches
+  `cloude-promote-setup`'s exactly (same env var, same
+  `cloude-run … ; exec bash` payload). Surfaced from the dashboard via
+  the `R` key.
 - **`cloude-finalize-cleanup <task-file>`** — Bash orchestrator for
   `/finalize` steps 4-10: verify/close PR, kill tmux, remove
   worktree, remove DinD volume, delete branch (COMPLETE only), move
@@ -240,12 +252,14 @@ The container:
   docker config mount is optional — skipped if absent). Mounting
   `~/.docker/config.json` lets the in-container `docker pull` reach
   private registries the host is logged into (e.g. ghcr.io).
-- The host's `GH_TOKEN` env var is forwarded into the container (when
-  set) so `gh` and the git credential helper baked into
-  `/etc/gitconfig` can authenticate against GitHub for HTTPS `git
-  fetch`/`push`. SSH-form remotes are not supported inside the
-  container (no SSH keys mounted); `/promote` clones via HTTPS to
-  avoid this.
+- A GitHub token is forwarded into the container so `gh` and the git
+  credential helper baked into `/etc/gitconfig` can authenticate
+  against GitHub for HTTPS `git fetch`/`push`. The host's `GH_TOKEN`
+  env var is used if set; otherwise `cloude-run` falls back to
+  `gh auth token` on the host (which extracts from gh's keyring on
+  macOS or wherever else gh stashed it). SSH-form remotes are not
+  supported inside the container (no SSH keys mounted); `/promote`
+  clones via HTTPS to avoid this.
 - Mounts the cloude repo at the same absolute path it has on the host
   (read-only) plus rw overlays for the task's source clone, worktree,
   and active `.org` file. Other tasks remain read-only.

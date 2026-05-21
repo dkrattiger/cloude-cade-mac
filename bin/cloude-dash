@@ -413,6 +413,38 @@ def _switch_tmux(stdscr, t: Task) -> str:
     return f"detached from {session}"
 
 
+def _resume_all_sessions() -> str:
+    # Shell out to bin/cloude-resume (no args) to re-create tmux
+    # sessions for any active task that doesn't have one. The script
+    # uses `tmux new-session -d`, which returns immediately - the
+    # heavy lifting (container boot) happens inside the new session,
+    # not in this call, so the dashboard stays responsive.
+    script = CLOUDE_ROOT / "bin" / "cloude-resume"
+    if not script.exists():
+        return "(cloude-resume not found)"
+    try:
+        r = subprocess.run(
+            [str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return "(cloude-resume timed out)"
+    except OSError as exc:
+        return f"(cloude-resume failed: {exc})"
+    # The script's last stdout line is "Summary: N resumed, ...".
+    summary = ""
+    for line in reversed((r.stdout or "").splitlines()):
+        if line.strip():
+            summary = line.strip()
+            break
+    if not summary:
+        summary = (r.stderr or "").strip().splitlines()[-1:] or ["(no output)"]
+        summary = summary[0] if isinstance(summary, list) else summary
+    return summary
+
+
 def _color(stdscr, tag: str) -> int:
     if not curses.has_colors():
         return 0
@@ -427,7 +459,7 @@ def _draw(stdscr, rows, selected: int, status: str) -> None:
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     title = "cloude tasks"
-    hint = "↑/↓ move  / search  p open PR  t tmux  c copy slug  r reload  q quit"
+    hint = "↑/↓ move  / search  p open PR  t tmux  R resume  c copy slug  r reload  q quit"
     stdscr.addnstr(0, 0, title, w - 1, curses.A_BOLD)
     if len(title) + len(hint) + 2 < w:
         stdscr.addnstr(0, w - len(hint) - 1, hint, len(hint), curses.A_DIM)
@@ -714,6 +746,8 @@ def _run(stdscr) -> None:
             if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
                 t: Task = rows[selected][1]  # type: ignore[assignment]
                 status = _switch_tmux(stdscr, t)
+        elif ch == ord("R"):
+            status = _resume_all_sessions()
         elif ch == ord("c"):
             if 0 <= selected < len(rows) and rows[selected][0] == ROW_TASK:
                 t: Task = rows[selected][1]  # type: ignore[assignment]

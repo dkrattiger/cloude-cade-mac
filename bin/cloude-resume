@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Re-create tmux sessions for active tasks.
+#
+# Use case: after a host reboot, all the tmux sessions for in-flight
+# tasks are gone (along with their containers — `cloude-run` launches
+# them with --rm). Each task's worktree, org file, branch, and PR are
+# still on disk / on GitHub, so all that's needed is to relaunch the
+# tmux session the same way `cloude-promote-setup` did originally.
+#
+# Usage:
+#   cloude-resume                # resume every active task missing a session
+#   cloude-resume <task-file>    # resume just that task
+#
+# Idempotent: if a tmux session already exists for a task, it's left
+# alone (counted as "already running" in the summary).
+#
+# Exit codes:
+#   0   every task is either resumed or already running
+#   1   at least one task was skipped (worktree missing, etc.)
+#   2   argument / setup error
+
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [<task-file>]
+
+Re-create tmux sessions for active tasks (host reboot recovery).
+
+With no argument, walks tasks/active/ and resumes every task whose
+tmux session is missing. With a task-file argument, resumes only that
+task. Existing sessions are left alone.
+EOF
+}
+
+case "${1-}" in
+    -h|--help) usage; exit 0 ;;
+esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLOUDE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TASK_INFO="$SCRIPT_DIR/cloude-task-info"
+CLOUDE_RUN="$SCRIPT_DIR/cloude-run"
+
+if [[ ! -x "$TASK_INFO" ]]; then
+    echo "ERROR: cloude-task-info not found alongside this script: $TASK_INFO" >&2
+    exit 2
+fi
+if [[ ! -x "$CLOUDE_RUN" ]]; then
+    echo "ERROR: cloude-run not found alongside this script: $CLOUDE_RUN" >&2
+    exit 2
+fi
+
+TASK_FILES=()
+if [[ $# -ge 1 ]]; then
+    if [[ ! -f "$1" ]]; then
+        echo "ERROR: not a file: $1" >&2
+        exit 2
+    fi
+    TASK_FILES+=("$(cd "$(dirname "$1")" && pwd)/$(basename "$1")")
+else
+    while IFS= read -r -d '' f; do
+        TASK_FILES+=("$f")
+    done < <(find "$CLOUDE_ROOT/tasks/active" -maxdepth 1 -type f -name "*.org" -print0 2>/dev/null | sort -z)
+fi
+
+if [[ ${#TASK_FILES[@]} -eq 0 ]]; then
+    echo "No active tasks to resume."
+    exit 0
+fi
+
+resumed=0
+already=0
+skipped=0
+
+resume_one() {
+    local task_file="$1"
+    local base
+    base="$(basename "$task_file")"
+
+    local info_out
+    if ! info_out="$("$TASK_INFO" "$task_file" 2>&1)"; then
+        echo "  $base: SKIP — cloude-task-info failed:"
+        printf '%s\n' "$info_out" | sed 's/^/    /'
+        skipped=$((skipped + 1))
+        return
+    fi
+
+    # Sub-shell so the eval'd KEY=VALUEs don't bleed into the caller.
+    # The sub-shell echoes one of: ALREADY|<session>, RESUMED|<session>,
+    # NO_WORKTREE|<path>, FAILED|<session>.
+    local result
+    result="$(
+        eval "$info_out"
+        if tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
+            echo "ALREADY|$TMUX_SESSION"
+            exit 0
+        fi
+        if [[ ! -d "$WORKTREE" ]]; then
+            echo "NO_WORKTREE|$WORKTREE"
+            exit 0
+        fi
+        # Mirror the tmux-new-session call in cloude-promote-setup:
+        # the session inherits CLOUDE_TASK_FILE via -e, and the initial
+        # pane runs cloude-run followed by `exec bash` so the pane
+        # survives when the container exits.
+        if tmux new-session -d -s "$TMUX_SESSION" -c "$WORKTREE" \
+                -e "CLOUDE_TASK_FILE=$task_file" \
+                "$CLOUDE_RUN $WORKTREE $task_file; exec bash" 2>/dev/null; then
+            echo "RESUMED|$TMUX_SESSION"
+        else
+            echo "FAILED|$TMUX_SESSION"
+        fi
+    )"
+
+    local kind="${result%%|*}"
+    local detail="${result#*|}"
+    case "$kind" in
+        ALREADY)
+            echo "  $base: already running ($detail)"
+            already=$((already + 1))
+            ;;
+        RESUMED)
+            echo "  $base: resumed ($detail)"
+            resumed=$((resumed + 1))
+            ;;
+        NO_WORKTREE)
+            echo "  $base: SKIP — worktree missing: $detail"
+            skipped=$((skipped + 1))
+            ;;
+        FAILED)
+            echo "  $base: FAILED to create tmux session $detail"
+            skipped=$((skipped + 1))
+            ;;
+        *)
+            echo "  $base: UNEXPECTED result: $result"
+            skipped=$((skipped + 1))
+            ;;
+    esac
+}
+
+for f in "${TASK_FILES[@]}"; do
+    resume_one "$f"
+done
+
+echo
+echo "Summary: $resumed resumed, $already already running, $skipped skipped."
+
+if [[ $skipped -gt 0 ]]; then
+    exit 1
+fi
+exit 0
