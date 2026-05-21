@@ -112,13 +112,30 @@ if [[ -f "$HOME/.docker/config.json" ]]; then
     DOCKER_CFG_MOUNT=(-v "$_cfg_tmp":/home/cloude/.docker/config.json:ro)
 fi
 
-# Forward GH_TOKEN so the in-container 'gh' (and the gh credential
+# Forward a GitHub token so the in-container 'gh' (and the gh credential
 # helper baked into /etc/gitconfig) can authenticate against GitHub.
-# Skipped silently if the host doesn't have it set.
+# Prefer an explicit GH_TOKEN from the environment; otherwise try
+# `gh auth token` on the host (covers users whose token lives in a
+# system keyring rather than ~/.config/gh — common on macOS).
+# Warn loudly if neither yields a token — silent failure here leaves
+# the in-container agent unable to talk to GitHub.
 GH_TOKEN_ENV=()
-if [[ -n "${GH_TOKEN:-}" ]]; then
-    GH_TOKEN_ENV=(-e "GH_TOKEN=$GH_TOKEN")
+_gh_token="${GH_TOKEN:-}"
+_gh_token_source=""
+if [[ -n "$_gh_token" ]]; then
+    _gh_token_source="GH_TOKEN env var"
+elif command -v gh >/dev/null 2>&1; then
+    _gh_token="$(gh auth token 2>/dev/null || true)"
+    [[ -n "$_gh_token" ]] && _gh_token_source="gh auth token"
 fi
+if [[ -n "$_gh_token" ]]; then
+    GH_TOKEN_ENV=(-e "GH_TOKEN=$_gh_token")
+else
+    echo "cloude-run: WARNING — no GitHub token obtained (neither \$GH_TOKEN nor 'gh auth token' yielded one)." >&2
+    echo "cloude-run: WARNING — the in-container agent will not be able to authenticate with GitHub." >&2
+    echo "cloude-run: WARNING — fix by running 'gh auth login' on the host, or by exporting GH_TOKEN before re-launching." >&2
+fi
+unset _gh_token _gh_token_source
 
 # tasks/active/ is mounted rw at the DIRECTORY level (not the specific
 # file). Reason: Docker single-file bind mounts pin to the source
@@ -137,7 +154,7 @@ fi
 # including transient VPN nameservers that go unreachable once the
 # VPN drops. Hard-coding 1.1.1.1 / 8.8.8.8 here keeps containers
 # resolving regardless of the host's current VPN state.
-exec docker run --rm -it --privileged --platform linux/amd64 \
+exec docker run --rm -it --privileged \
     --dns 1.1.1.1 --dns 8.8.8.8 \
     -v cloude-claude-creds:/persist \
     -v "$DIND_VOLUME":/var/lib/docker \
@@ -147,11 +164,12 @@ exec docker run --rm -it --privileged --platform linux/amd64 \
     -v "$CLOUDE/tasks/active":"$CLOUDE/tasks/active":rw \
     -v "$HOME/.gitconfig":/home/cloude/.gitconfig:ro \
     -v "$HOME/.config/gh":/home/cloude/.config/gh:ro \
-    "${DOCKER_CFG_MOUNT[@]}" \
-    "${GH_TOKEN_ENV[@]}" \
+    ${DOCKER_CFG_MOUNT[@]+"${DOCKER_CFG_MOUNT[@]}"} \
+    ${GH_TOKEN_ENV[@]+"${GH_TOKEN_ENV[@]}"} \
     -e "CLOUDE_TASK_FILE=$TASK_FILE" \
     -e "CLOUDE_ROOT=$CLOUDE" \
     -e "DOCKER_HOST=unix:///var/run/docker.sock" \
+    -e "DOCKER_DEFAULT_PLATFORM=linux/amd64" \
     -w "$WORKTREE" \
     cloude \
     claude --dangerously-skip-permissions --settings /etc/cloude/settings.json
