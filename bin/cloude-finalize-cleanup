@@ -176,7 +176,7 @@ remove_worktree() {
     if $FORCE_WORKTREE; then
         extra+=(--force)
     fi
-    git -C "$SOURCE_CLONE" worktree remove "${extra[@]}" "$WORKTREE"
+    git -C "$SOURCE_CLONE" worktree remove ${extra[@]+"${extra[@]}"} "$WORKTREE"
 }
 
 if ! err="$(remove_worktree 2>&1)"; then
