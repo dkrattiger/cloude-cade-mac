@@ -305,3 +305,74 @@ exports inside the container).
   `make clean` — teardown. `clean-volume` erases saved credentials;
   `clean-dind-data` removes every per-task `cloude-dind-*` volume
   (image caches inside containers).
+
+### Apple Silicon / non-x86_64 hosts
+
+The cloude image builds for the host's native architecture. On an
+Apple Silicon Mac that's `linux/arm64`; on Linux arm64 / Graviton,
+same. `uname -m` inside the container reports the host arch
+(`aarch64` on arm64 hosts, `x86_64` on x86_64 hosts) — *not*
+whatever the project's app stack happens to be built for. The DinD
+`dockerd` inside the cloude container can still run child containers
+at a different arch via the host kernel's `binfmt_misc` registration
+(Rosetta on Docker Desktop for Mac; manually-installed
+`qemu-user-binfmt` on Linux arm64).
+
+There are two independent arch decisions per task:
+
+1. *Arch of the cloude container itself.* Always native for
+   speed — `make build` doesn't pin `--platform`, and
+   `bin/cloude-run`'s `docker run` doesn't either. Agent
+   loop, git, gh, dockerd, hooks all benefit.
+2. *Arch of the app stack the agent runs inside DinD.* Per
+   project. Some projects build / publish multi-arch images and
+   work native; some are amd64-only and run under emulation in
+   DinD; some mix.
+
+How the agent runs the app from inside a non-native-arch project:
+
+- Pull / load images for whatever arch the project expects, then
+  `docker compose up`. The DinD's `binfmt_misc` will emulate
+  mismatched architectures transparently — at a cost. JVM-heavy
+  services (OpenSearch, Elasticsearch) and Rust binaries in
+  particular slow down a lot under Rosetta; tune service
+  resources (heap caps, healthcheck `start_period`) accordingly.
+- For projects that publish amd64-only base images but build
+  on top of them locally, the cleanest fix is a host-side
+  bootstrap script that builds the dev image natively for the
+  cloude host's arch and caches the resulting tarballs into
+  `~/.cloude/image-cache/` — `bin/cloude-run` bind-mounts that
+  directory into every cloude container, and
+  `docker/entrypoint.sh` `docker load`s every tarball it finds
+  on dockerd start. The unsupervised-main bootstrap
+  (`bin/cloude-unsupervised-bootstrap` on the user's
+  `dkrattiger/cloude-cade-mac` fork) is an example.
+- Per-worktree compose overlays (gitignored, optionally also
+  committed as a recovery snapshot on a draft branch) carry the
+  per-machine knobs: `platform:` pins for services that need
+  emulation, resource caps for emulated JVMs, bind-mounts for
+  paths the project's containers expect but DinD doesn't see
+  by default (e.g. parent-repo `.git` for worktree gitlinks —
+  Docker exposes the cloude container's filesystem to DinD, so
+  any path the cloude container can see is bind-mountable into
+  DinD children at the same path).
+
+Caveat for Linux arm64 / Graviton: Docker Desktop for Mac
+pre-registers Rosetta for `linux/amd64` in the linuxkit VM, so
+amd64 child containers Just Work inside DinD. On stock Linux
+arm64, that's not automatic — install
+`qemu-user-static-binfmt` (or the distro equivalent) on the
+host before launching cloude, or amd64 child images will fail
+with `exec format error`.
+
+Sanity-check the arch boundary on a new host:
+
+```sh
+# Inside a cloude container:
+uname -m                                    # expect: matches host
+docker info --format '{{.Architecture}}'    # DinD's view; same
+docker run --rm --platform=linux/amd64 alpine uname -m   # expect: x86_64 (via emulation)
+```
+
+If the third command errors with `exec format error`, the host's
+`binfmt_misc` isn't set up — install qemu-user-binfmt (Linux)

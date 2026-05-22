@@ -265,6 +265,10 @@ in mind:
 - The worktree is the cwd and writable. The rest of the cloude repo
   (staging.org, completed/, dropped/, README, scripts) is
   read-only — treat the worktree as your sandbox.
+- On non-x86_64 hosts (Apple Silicon Mac, Linux arm64, Graviton),
+  the cloude container itself runs at the host's arch; the app
+  stack inside DinD may need per-project overlays — see
+  `docs/internals.md` *Apple Silicon / non-x86_64 hosts*.
 - git and `gh` auth come from the host (`~/.gitconfig`, `~/.config/gh`,
   mounted read-only). Use them as you would on the host.
 
